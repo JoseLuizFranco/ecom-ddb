@@ -1,0 +1,34 @@
+name: testes
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  integracao:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Sobe o cluster YugabyteDB (3 nós) e popula o banco
+        run: |
+          docker compose up -d yb1 yb2 yb3 db-init
+          docker compose wait db-init
+
+      - run: npm ci
+
+      - name: Testes de concorrência no cluster
+        run: npm test
+
+      - name: Demonstração da disputa
+        run: npm run disputa
+
+      - name: Logs do cluster
+        if: failure()
+        run: docker compose logs --tail=200

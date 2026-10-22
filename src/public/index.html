@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portal B2B</title>
+<style>
+  :root { --fg:#1d2433; --muted:#5b6578; --bg:#f6f7f9; --card:#fff; --line:#dde1e8; --ok:#1f7a4d; --err:#b42318; --accent:#2457c5; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:var(--fg); background:var(--bg); }
+  header { padding:16px 24px; background:var(--card); border-bottom:1px solid var(--line); }
+  header h1 { margin:0; font-size:20px; }
+  header p { margin:4px 0 0; color:var(--muted); }
+  main { max-width:1100px; margin:0 auto; padding:20px 16px; display:grid; gap:16px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; }
+  h2 { margin:0 0 12px; font-size:16px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  button, select, input { font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:#fff; }
+  button { background:var(--accent); color:#fff; border-color:var(--accent); cursor:pointer; }
+  button.sec { background:#fff; color:var(--accent); }
+  .ok { color:var(--ok); } .err { color:var(--err); }
+  .pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; border:1px solid currentColor; }
+  pre { background:#0f172a; color:#e2e8f0; padding:12px; border-radius:6px; overflow:auto; font-size:12px; max-height:360px; }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Portal B2B</h1>
+  <p>Comércio B2B sobre banco de dados distribuído — laboratório de controle de concorrência</p>
+</header>
+<main>
+  <section>
+    <h2>Cluster</h2>
+    <div id="cluster">carregando…</div>
+  </section>
+
+  <section>
+    <h2>Laboratório: Comprador A (700 kg) × Comprador B (500 kg) sobre 1.000 kg</h2>
+    <div class="row">
+      <select id="estrategia">
+        <option value="SEM_CONTROLE">Sem controle</option>
+        <option value="PESSIMISTA">Pessimista (SELECT … FOR UPDATE)</option>
+        <option value="OTIMISTA">Otimista (coluna versao)</option>
+      </select>
+      <label>atraso <input id="atraso" type="number" value="300" min="0" style="width:90px"> ms</label>
+      <button id="disputar">Executar disputa</button>
+      <button id="reset" class="sec">Resetar estoque</button>
+    </div>
+    <div id="resumo" style="margin-top:12px"></div>
+    <pre id="saida" hidden></pre>
+  </section>
+
+  <div class="grid2">
+    <section>
+      <h2>Catálogo</h2>
+      <div id="catalogo"></div>
+    </section>
+    <section>
+      <h2>Comprar</h2>
+      <div class="row" style="flex-direction:column;align-items:stretch">
+        <select id="fornecimento"></select>
+        <select id="comprador"></select>
+        <div class="row">
+          <input id="quantidade" type="number" value="100" min="1" style="width:120px">
+          <select id="estrategiaCompra">
+            <option>PESSIMISTA</option><option>OTIMISTA</option><option>SEM_CONTROLE</option>
+          </select>
+          <button id="comprar">Comprar</button>
+        </div>
+        <div id="msgCompra"></div>
+      </div>
+    </section>
+  </div>
+
+  <section>
+    <h2>Últimos pedidos</h2>
+    <div id="pedidos"></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const api = async (url, body) => {
+  const r = await fetch(url, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+  const j = await r.json();
+  if (!r.ok) throw Object.assign(new Error(j.erro || r.statusText), { dados: j });
+  return j;
+};
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const brl = (v) => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const tabela = (cols, rows) => `<table><tr>${cols.map((c) => `<th>${c[0]}</th>`).join('')}</tr>${
+  rows.map((r) => `<tr>${cols.map((c) => `<td>${c[1](r)}</td>`).join('')}</tr>`).join('')}</table>`;
+
+async function carregarCluster() {
+  const c = await api('/api/cluster');
+  const topo = Object.fromEntries((c.topologia || []).map((t) => [t.host, t]));
+  $('cluster').innerHTML = `<p>Modo: <b>${esc(c.modo)}</b></p>` + tabela([
+    ['Nó', (n) => esc(n.no)],
+    ['Status', (n) => n.online ? `<span class="pill ok">online</span>` : `<span class="pill err">offline</span>`],
+    ['Latência', (n) => n.online ? n.latencia_ms + ' ms' : esc(n.erro)],
+  ], c.nos) + (c.topologia ? '<p style="margin-top:12px">Topologia (yb_servers):</p>' + tabela([
+    ['Host', (t) => esc(t.host)], ['Região', (t) => esc(t.region)], ['Zona', (t) => esc(t.zone)], ['Tipo', (t) => esc(t.node_type)],
+  ], c.topologia) : '');
+}
+
+async function carregarCatalogo() {
+  const f = await api('/api/fornecimentos');
+  $('catalogo').innerHTML = tabela([
+    ['Produto', (r) => esc(r.produto)], ['Fornecedor', (r) => esc(r.fornecedor)],
+    ['Preço', (r) => brl(r.preco_unitario) + '/' + esc(r.unidade_medida)],
+    ['Disponível', (r) => r.quantidade_disponivel.toLocaleString('pt-BR') + ' ' + esc(r.unidade_medida)],
+    ['Versão', (r) => r.versao],
+  ], f.itens) + `<p style="color:var(--muted)">lido no nó ${esc(f.no_banco)}</p>`;
+  $('fornecimento').innerHTML = f.itens.map((r) => `<option value="${r.id}">${esc(r.produto)} — ${esc(r.fornecedor)}</option>`).join('');
+}
+
+async function carregarCompradores() {
+  const c = await api('/api/compradores');
+  $('comprador').innerHTML = c.map((r) => `<option value="${r.cnpj}">${esc(r.nome_fantasia)} (${r.cnpj})</option>`).join('');
+}
+
+async function carregarPedidos() {
+  const p = await api('/api/pedidos');
+  $('pedidos').innerHTML = p.length ? tabela([
+    ['Comprador', (r) => esc(r.comprador)], ['Produto', (r) => esc(r.produto)],
+    ['Qtd', (r) => r.quantidade], ['Total', (r) => brl(r.valor_total)],
+    ['Estratégia', (r) => esc(r.estrategia)], ['Nó', (r) => esc(r.no_banco)],
+    ['Data', (r) => new Date(r.criado_em).toLocaleString('pt-BR')],
+  ], p) : '<p>Nenhum pedido.</p>';
+}
+
+const recarregar = () => Promise.all([carregarCluster(), carregarCatalogo(), carregarPedidos()]);
+
+$('disputar').onclick = async () => {
+  $('resumo').textContent = 'executando…';
+  try {
+    const d = await api('/api/laboratorio/disputa', { estrategia: $('estrategia').value, atraso_ms: Number($('atraso').value) });
+    const e = d.estado_final;
+    $('resumo').innerHTML = d.compras.map((c) => `<div>${esc(c.comprador)} (${c.quantidade} kg): ${
+      c.ok ? `<span class="ok">aceito no nó ${esc(c.no_banco)}</span>` : `<span class="err">${esc(c.erro)}</span>`}</div>`).join('')
+      + `<p>Estoque final: <b>${e.quantidade_disponivel} kg</b> · vendido: <b>${e.quantidade_vendida} kg</b> · `
+      + (e.consistente ? '<span class="pill ok">consistente</span>' : '<span class="pill err">INCONSISTENTE (lost update)</span>') + '</p>';
+    $('saida').hidden = false;
+    $('saida').textContent = JSON.stringify(d, null, 2);
+  } catch (err) { $('resumo').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+  recarregar();
+};
+
+$('reset').onclick = async () => { await api('/api/laboratorio/reset', {}); $('resumo').textContent = 'Estoque restaurado para 1.000 kg.'; recarregar(); };
+
+$('comprar').onclick = async () => {
+  try {
+    const r = await api('/api/pedidos', {
+      fornecimento_id: $('fornecimento').value, comprador_cnpj: $('comprador').value,
+      quantidade: Number($('quantidade').value), estrategia: $('estrategiaCompra').value,
+    });
+    $('msgCompra').innerHTML = `<span class="ok">Pedido ${esc(r.pedido.id)} — ${brl(r.pedido.valor_total)} (nó ${esc(r.no_banco)})</span>`;
+  } catch (err) { $('msgCompra').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+  recarregar();
+};
+
+carregarCompradores();
+recarregar();
+setInterval(carregarCluster, 5000);
+</script>
+</body>
+</html>
